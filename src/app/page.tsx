@@ -257,25 +257,37 @@ export default function Home() {
                         </span>
                       </div>
                       <Card
-                        className={`p-3 cursor-pointer hover:shadow-md transition-shadow ${
+                        className={`p-3 relative group hover:shadow-md transition-shadow ${
                           isMe
                             ? 'bg-blue-500 text-white border-blue-500'
                             : 'bg-white dark:bg-slate-900'
                         }`}
-                        onClick={() => copyMessage(message.id, message.content)}
                       >
-                        <pre className="whitespace-pre-wrap text-sm font-mono break-all">
+                        <pre className="whitespace-pre-wrap text-sm font-mono break-all pr-6">
                           {message.content}
                         </pre>
-                      </Card>
-                      {copiedId === message.id && (
-                        <div
-                          className={`text-xs mt-1 ${isMe ? 'text-right' : ''}`}
+                        {/* 复制按钮 */}
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            copyMessage(message.id, message.content);
+                          }}
+                          className={`absolute bottom-1 right-1 p-1.5 rounded-md opacity-0 group-hover:opacity-100 transition-all ${
+                            copiedId === message.id
+                              ? 'bg-green-500/20'
+                              : isMe
+                              ? 'bg-white/20 hover:bg-white/30'
+                              : 'bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700'
+                          }`}
+                          title="复制"
                         >
-                          <Check className="w-3 h-3 inline text-green-500" />
-                          已复制
-                        </div>
-                      )}
+                          {copiedId === message.id ? (
+                            <Check className={`w-3.5 h-3.5 ${isMe ? 'text-white' : 'text-green-500'}`} />
+                          ) : (
+                            <Copy className={`w-3.5 h-3.5 ${isMe ? 'text-white/80' : 'text-muted-foreground'}`} />
+                          )}
+                        </button>
+                      </Card>
                     </div>
                   </div>
                 );
