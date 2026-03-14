@@ -1,224 +1,379 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Switch } from '@/components/ui/switch';
 import { Label } from '@/components/ui/label';
-import { Copy, Send, RefreshCw, Check, Wifi, Clock, Monitor } from 'lucide-react';
+import {
+  Send,
+  Copy,
+  Check,
+  RefreshCw,
+  Trash2,
+  Users,
+  Clock,
+  Monitor,
+  ChevronDown,
+} from 'lucide-react';
 
-interface ClipboardData {
+interface Message {
+  id: string;
   content: string;
-  updatedAt: number;
   device: string;
+  deviceId: string;
+  timestamp: number;
 }
 
 export default function Home() {
-  const [content, setContent] = useState('');
-  const [remoteData, setRemoteData] = useState<ClipboardData | null>(null);
+  const [messages, setMessages] = useState<Message[]>([]);
+  const [inputContent, setInputContent] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [copied, setCopied] = useState(false);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
   const [autoSync, setAutoSync] = useState(true);
-  const [lastSyncTime, setLastSyncTime] = useState<Date | null>(null);
-  const [deviceId] = useState(() => `设备-${Math.random().toString(36).slice(2, 6).toUpperCase()}`);
+  const [deviceId] = useState(() =>
+    Math.random().toString(36).slice(2, 6).toUpperCase()
+  );
+  const [deviceName] = useState(() => `设备-${deviceId}`);
+  const [onlineDevices, setOnlineDevices] = useState<Set<string>>(new Set());
+  const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const lastMessageIdRef = useRef<string>('');
 
-  // 获取远程剪贴板
-  const fetchClipboard = useCallback(async () => {
+  // 获取消息列表
+  const fetchMessages = useCallback(async () => {
     try {
-      const res = await fetch('/api/clipboard');
+      const url = lastMessageIdRef.current
+        ? `/api/messages?after=${lastMessageIdRef.current}`
+        : '/api/messages';
+      const res = await fetch(url);
       const data = await res.json();
-      if (data.success) {
-        setRemoteData(data.data);
-        if (data.data.content && data.data.device !== deviceId) {
-          setContent(data.data.content);
-        }
+      if (data.success && data.data.messages.length > 0) {
+        setMessages((prev) => {
+          const newMessages = [...prev, ...data.data.messages];
+          // 去重
+          const uniqueMessages = Array.from(
+            new Map(newMessages.map((m) => [m.id, m])).values()
+          );
+          return uniqueMessages;
+        });
+        // 更新最后一条消息ID
+        const lastMessage = data.data.messages[data.data.messages.length - 1];
+        lastMessageIdRef.current = lastMessage.id;
       }
     } catch (error) {
-      console.error('获取剪贴板失败:', error);
+      console.error('获取消息失败:', error);
     }
-  }, [deviceId]);
+  }, []);
 
-  // 发送剪贴板内容
-  const sendClipboard = async () => {
-    if (!content.trim()) return;
+  // 发送消息
+  const sendMessage = async () => {
+    if (!inputContent.trim() || isLoading) return;
     setIsLoading(true);
     try {
-      const res = await fetch('/api/clipboard', {
+      const res = await fetch('/api/messages', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content, device: deviceId }),
+        body: JSON.stringify({
+          content: inputContent.trim(),
+          device: deviceName,
+          deviceId: deviceId,
+        }),
       });
       const data = await res.json();
       if (data.success) {
-        setRemoteData(data.data);
-        setLastSyncTime(new Date());
+        setInputContent('');
+        // 立即获取新消息
+        fetchMessages();
       }
     } catch (error) {
-      console.error('发送剪贴板失败:', error);
+      console.error('发送消息失败:', error);
     } finally {
       setIsLoading(false);
     }
   };
 
-  // 复制到本地剪贴板
-  const copyToClipboard = async () => {
-    if (!content) return;
+  // 复制消息内容
+  const copyMessage = async (id: string, content: string) => {
     try {
       await navigator.clipboard.writeText(content);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      setCopiedId(id);
+      setTimeout(() => setCopiedId(null), 2000);
     } catch (error) {
       console.error('复制失败:', error);
     }
   };
 
-  // 从本地剪贴板粘贴
-  const pasteFromClipboard = async () => {
+  // 清空消息
+  const clearMessages = async () => {
+    if (!confirm('确定要清空所有消息吗？')) return;
     try {
-      const text = await navigator.clipboard.readText();
-      setContent(text);
+      await fetch('/api/messages', { method: 'DELETE' });
+      setMessages([]);
+      lastMessageIdRef.current = '';
     } catch (error) {
-      console.error('粘贴失败:', error);
+      console.error('清空消息失败:', error);
     }
+  };
+
+  // 滚动到底部
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
   // 自动同步
   useEffect(() => {
     if (!autoSync) return;
-    fetchClipboard();
-    const interval = setInterval(fetchClipboard, 1000);
+    fetchMessages();
+    const interval = setInterval(fetchMessages, 1000);
     return () => clearInterval(interval);
-  }, [autoSync, fetchClipboard]);
+  }, [autoSync, fetchMessages]);
+
+  // 新消息时滚动到底部
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages]);
+
+  // 更新在线设备
+  useEffect(() => {
+    const devices = new Set<string>();
+    const now = Date.now();
+    messages.forEach((m) => {
+      if (now - m.timestamp < 5 * 60 * 1000) {
+        // 5分钟内活跃
+        devices.add(m.device);
+      }
+    });
+    setOnlineDevices(devices);
+  }, [messages]);
 
   // 格式化时间
   const formatTime = (timestamp: number) => {
-    if (!timestamp) return '从未';
     const date = new Date(timestamp);
     return date.toLocaleTimeString('zh-CN', {
       hour: '2-digit',
       minute: '2-digit',
-      second: '2-digit',
     });
   };
 
+  // 格式化日期
+  const formatDate = (timestamp: number) => {
+    const date = new Date(timestamp);
+    const today = new Date();
+    if (date.toDateString() === today.toDateString()) {
+      return '今天';
+    }
+    return date.toLocaleDateString('zh-CN', {
+      month: 'long',
+      day: 'numeric',
+    });
+  };
+
+  // 按日期分组消息
+  const groupedMessages = messages.reduce<{ date: string; messages: Message[] }[]>(
+    (groups, message) => {
+      const date = formatDate(message.timestamp);
+      const lastGroup = groups[groups.length - 1];
+      if (lastGroup && lastGroup.date === date) {
+        lastGroup.messages.push(message);
+      } else {
+        groups.push({ date, messages: [message] });
+      }
+      return groups;
+    },
+    []
+  );
+
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-50 to-slate-100 dark:from-slate-950 dark:to-slate-900 p-4 sm:p-8">
-      <div className="max-w-2xl mx-auto space-y-6">
-        {/* 头部 */}
-        <div className="text-center space-y-2">
-          <div className="flex items-center justify-center gap-2">
-            <Wifi className="w-6 h-6 text-blue-500" />
-            <h1 className="text-2xl font-bold">局域网剪贴板同步</h1>
+    <div className="flex flex-col h-screen bg-slate-50 dark:bg-slate-950">
+      {/* 头部 */}
+      <header className="flex-shrink-0 border-b bg-white dark:bg-slate-900 px-4 py-3">
+        <div className="max-w-3xl mx-auto flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-500 to-purple-600 flex items-center justify-center">
+              <Users className="w-5 h-5 text-white" />
+            </div>
+            <div>
+              <h1 className="font-semibold">LocalShare 群聊</h1>
+              <p className="text-xs text-muted-foreground flex items-center gap-1">
+                <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+                {onlineDevices.size + 1} 台设备在线
+              </p>
+            </div>
           </div>
-          <p className="text-muted-foreground">电脑A浏览器访问此页面即可同步</p>
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Badge variant="secondary">{deviceName}</Badge>
+            </div>
+            <Switch checked={autoSync} onCheckedChange={setAutoSync} />
+          </div>
         </div>
+      </header>
 
-        {/* 状态卡片 */}
-        <Card>
-          <CardHeader className="pb-3">
-            <div className="flex items-center justify-between">
-              <div className="space-y-1">
-                <CardTitle className="text-base">同步状态</CardTitle>
-                <CardDescription>
-                  当前设备: <Badge variant="secondary">{deviceId}</Badge>
-                </CardDescription>
+      {/* 消息列表 */}
+      <main className="flex-1 overflow-y-auto px-4 py-4">
+        <div className="max-w-3xl mx-auto space-y-4">
+          {groupedMessages.map((group) => (
+            <div key={group.date}>
+              {/* 日期分隔 */}
+              <div className="flex items-center justify-center my-4">
+                <div className="px-3 py-1 rounded-full bg-slate-200 dark:bg-slate-800 text-xs text-muted-foreground">
+                  {group.date}
+                </div>
               </div>
-              <div className="flex items-center gap-2">
-                <Switch
-                  id="auto-sync"
-                  checked={autoSync}
-                  onCheckedChange={setAutoSync}
-                />
-                <Label htmlFor="auto-sync" className="text-sm">自动同步</Label>
-              </div>
-            </div>
-          </CardHeader>
-          <CardContent>
-            <div className="flex flex-wrap gap-4 text-sm text-muted-foreground">
-              <div className="flex items-center gap-1">
-                <Monitor className="w-4 h-4" />
-                <span>最后来源: {remoteData?.device || '无'}</span>
-              </div>
-              <div className="flex items-center gap-1">
-                <Clock className="w-4 h-4" />
-                <span>更新时间: {formatTime(remoteData?.updatedAt || 0)}</span>
-              </div>
-            </div>
-          </CardContent>
-        </Card>
 
-        {/* 剪贴板区域 */}
-        <Card>
-          <CardHeader>
-            <CardTitle>剪贴板内容</CardTitle>
-            <CardDescription>输入内容后点击发送，或自动接收其他设备的内容</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
+              {/* 消息 */}
+              {group.messages.map((message) => {
+                const isMe = message.deviceId === deviceId;
+                return (
+                  <div
+                    key={message.id}
+                    className={`flex gap-3 mb-4 ${isMe ? 'flex-row-reverse' : ''}`}
+                  >
+                    {/* 头像 */}
+                    <div
+                      className={`flex-shrink-0 w-9 h-9 rounded-full flex items-center justify-center text-white text-sm font-medium ${
+                        isMe
+                          ? 'bg-gradient-to-br from-blue-500 to-blue-600'
+                          : 'bg-gradient-to-br from-gray-500 to-gray-600'
+                      }`}
+                    >
+                      {message.device.slice(-2).toUpperCase()}
+                    </div>
+
+                    {/* 消息内容 */}
+                    <div className={`max-w-[70%] ${isMe ? 'text-right' : ''}`}>
+                      <div
+                        className={`flex items-center gap-2 mb-1 ${isMe ? 'flex-row-reverse' : ''}`}
+                      >
+                        <span className="text-xs text-muted-foreground">
+                          {message.device}
+                        </span>
+                        <span className="text-xs text-muted-foreground flex items-center gap-1">
+                          <Clock className="w-3 h-3" />
+                          {formatTime(message.timestamp)}
+                        </span>
+                      </div>
+                      <Card
+                        className={`p-3 cursor-pointer hover:shadow-md transition-shadow ${
+                          isMe
+                            ? 'bg-blue-500 text-white border-blue-500'
+                            : 'bg-white dark:bg-slate-900'
+                        }`}
+                        onClick={() => copyMessage(message.id, message.content)}
+                      >
+                        <pre className="whitespace-pre-wrap text-sm font-mono break-all">
+                          {message.content}
+                        </pre>
+                      </Card>
+                      {copiedId === message.id && (
+                        <div
+                          className={`text-xs mt-1 ${isMe ? 'text-right' : ''}`}
+                        >
+                          <Check className="w-3 h-3 inline text-green-500" />
+                          已复制
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ))}
+
+          {messages.length === 0 && (
+            <div className="text-center text-muted-foreground py-20">
+              <div className="w-16 h-16 rounded-full bg-slate-200 dark:bg-slate-800 mx-auto mb-4 flex items-center justify-center">
+                <Monitor className="w-8 h-8" />
+              </div>
+              <p>暂无消息</p>
+              <p className="text-sm mt-1">发送内容开始分享</p>
+            </div>
+          )}
+
+          <div ref={messagesEndRef} />
+        </div>
+      </main>
+
+      {/* 输入区域 */}
+      <footer className="flex-shrink-0 border-t bg-white dark:bg-slate-900 px-4 py-3">
+        <div className="max-w-3xl mx-auto">
+          <div className="flex gap-2">
             <Textarea
               ref={textareaRef}
-              value={content}
-              onChange={(e) => setContent(e.target.value)}
-              placeholder="在这里输入或粘贴内容..."
-              className="min-h-[200px] font-mono text-sm"
+              value={inputContent}
+              onChange={(e) => setInputContent(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  sendMessage();
+                }
+              }}
+              placeholder="输入内容，按 Enter 发送..."
+              className="min-h-[44px] max-h-32 resize-none"
+              rows={1}
             />
-
-            {/* 操作按钮 */}
-            <div className="flex flex-wrap gap-2">
-              <Button onClick={sendClipboard} disabled={isLoading || !content.trim()}>
+            <div className="flex flex-col gap-2">
+              <Button
+                onClick={sendMessage}
+                disabled={isLoading || !inputContent.trim()}
+                className="h-[44px] px-6"
+              >
                 {isLoading ? (
-                  <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+                  <RefreshCw className="w-4 h-4 animate-spin" />
                 ) : (
-                  <Send className="w-4 h-4 mr-2" />
+                  <Send className="w-4 h-4" />
                 )}
-                发送到服务器
-              </Button>
-
-              <Button variant="outline" onClick={copyToClipboard} disabled={!content}>
-                {copied ? (
-                  <Check className="w-4 h-4 mr-2 text-green-500" />
-                ) : (
-                  <Copy className="w-4 h-4 mr-2" />
-                )}
-                {copied ? '已复制' : '复制内容'}
-              </Button>
-
-              <Button variant="outline" onClick={pasteFromClipboard}>
-                从剪贴板粘贴
-              </Button>
-
-              <Button variant="ghost" onClick={fetchClipboard}>
-                <RefreshCw className="w-4 h-4 mr-2" />
-                刷新
               </Button>
             </div>
-
-            {/* 字数统计 */}
-            {content && (
-              <div className="text-xs text-muted-foreground text-right">
-                {content.length} 字符
-              </div>
-            )}
-          </CardContent>
-        </Card>
-
-        {/* 使用说明 */}
-        <Card className="bg-slate-50 dark:bg-slate-900 border-0">
-          <CardContent className="pt-6">
-            <div className="text-sm text-muted-foreground space-y-2">
-              <p className="font-medium text-foreground">使用方法：</p>
-              <ol className="list-decimal list-inside space-y-1">
-                <li>电脑B运行此Web服务（默认端口5000）</li>
-                <li>电脑A浏览器访问 <code className="bg-slate-200 dark:bg-slate-800 px-1 rounded">http://电脑B的IP:5000</code></li>
-                <li>任一设备输入内容并点击"发送到服务器"</li>
-                <li>其他设备开启"自动同步"后会自动接收</li>
-              </ol>
+          </div>
+          <div className="flex items-center justify-between mt-2 text-xs text-muted-foreground">
+            <div className="flex items-center gap-2">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={async () => {
+                  try {
+                    const text = await navigator.clipboard.readText();
+                    setInputContent(text);
+                  } catch (error) {
+                    console.error('粘贴失败:', error);
+                  }
+                }}
+                className="h-7 px-2"
+              >
+                <Copy className="w-3 h-3 mr-1" />
+                粘贴
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={scrollToBottom}
+                className="h-7 px-2"
+              >
+                <ChevronDown className="w-3 h-3 mr-1" />
+                滚动到底部
+              </Button>
             </div>
-          </CardContent>
-        </Card>
-      </div>
+            <div className="flex items-center gap-2">
+              {messages.length > 0 && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={clearMessages}
+                  className="h-7 px-2 text-destructive hover:text-destructive"
+                >
+                  <Trash2 className="w-3 h-3 mr-1" />
+                  清空
+                </Button>
+              )}
+              <span>{inputContent.length} 字符</span>
+            </div>
+          </div>
+        </div>
+      </footer>
     </div>
   );
 }

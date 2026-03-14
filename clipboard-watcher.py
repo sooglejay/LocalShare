@@ -23,12 +23,16 @@ except ImportError:
     sys.exit(1)
 
 
-def send_to_server(content: str, server_url: str, device_name: str) -> bool:
-    """发送内容到服务器"""
+def send_message(content: str, server_url: str, device_name: str, device_id: str) -> bool:
+    """发送消息到服务器"""
     try:
-        data = json.dumps({"content": content, "device": device_name}).encode("utf-8")
+        data = json.dumps({
+            "content": content,
+            "device": device_name,
+            "deviceId": device_id
+        }).encode("utf-8")
         req = urllib.request.Request(
-            f"{server_url}/api/clipboard",
+            f"{server_url}/api/messages",
             data=data,
             headers={"Content-Type": "application/json"},
             method="POST"
@@ -41,10 +45,13 @@ def send_to_server(content: str, server_url: str, device_name: str) -> bool:
         return False
 
 
-def get_from_server(server_url: str) -> dict:
-    """从服务器获取内容"""
+def get_messages(server_url: str, after_id: str = "") -> dict:
+    """从服务器获取消息"""
     try:
-        req = urllib.request.Request(f"{server_url}/api/clipboard")
+        url = f"{server_url}/api/messages"
+        if after_id:
+            url += f"?after={after_id}"
+        req = urllib.request.Request(url)
         with urllib.request.urlopen(req, timeout=3) as response:
             return json.loads(response.read().decode("utf-8"))
     except Exception as e:
@@ -65,18 +72,26 @@ def main():
     if args.port:
         server_url = f"http://localhost:{args.port}"
 
+    # 生成设备ID
+    import random
+    import string
+    device_id = ''.join(random.choices(string.ascii_uppercase + string.digits, k=4))
+    device_name = f"{args.device}-{device_id}"
+    
+    # 记录最后一条消息ID
+    last_message_id = ""
+
     print("\n" + "=" * 50)
     print("  LocalShare 剪贴板监听器")
     print("=" * 50)
     print(f"  服务地址: {server_url}")
-    print(f"  设备名称: {args.device}")
+    print(f"  设备名称: {device_name}")
     print(f"  检查间隔: {args.interval}秒")
     print("=" * 50)
     print("  按 Ctrl+C 停止")
     print("=" * 50 + "\n")
 
     last_local_content = pyperclip.paste()
-    last_remote_update = 0
 
     print("✓ 开始监听剪贴板...\n")
 
@@ -86,24 +101,26 @@ def main():
             current_local = pyperclip.paste()
             if current_local != last_local_content and current_local:
                 last_local_content = current_local
-                if send_to_server(current_local, server_url, args.device):
-                    print(f"📤 已推送: {len(current_local)} 字符")
+                if send_message(current_local, server_url, device_name, device_id):
+                    print(f"📤 已发送: {len(current_local)} 字符")
                 continue
 
-            # 2. 检查服务器更新 → 同步到本地
-            result = get_from_server(server_url)
+            # 2. 检查服务器新消息 → 同步到本地
+            result = get_messages(server_url, last_message_id)
             if result.get("success"):
-                data = result.get("data", {})
-                remote_update = data.get("updatedAt", 0)
-                remote_content = data.get("content", "")
-                remote_device = data.get("device", "")
-
-                # 如果服务器有新内容且不是自己发的
-                if remote_update > last_remote_update and remote_content and remote_device != args.device:
-                    last_remote_update = remote_update
-                    last_local_content = remote_content
-                    pyperclip.copy(remote_content)
-                    print(f"📥 已同步: {len(remote_content)} 字符 (来自 {remote_device})")
+                messages = result.get("data", {}).get("messages", [])
+                for msg in messages:
+                    # 跳过自己发的消息
+                    if msg.get("deviceId") == device_id:
+                        last_message_id = msg.get("id", "")
+                        continue
+                    
+                    content = msg.get("content", "")
+                    if content and msg.get("id", "") != last_message_id:
+                        last_local_content = content
+                        pyperclip.copy(content)
+                        last_message_id = msg.get("id", "")
+                        print(f"📥 已同步: {len(content)} 字符 (来自 {msg.get('device', '未知')})")
 
         except KeyboardInterrupt:
             print("\n\n已停止监听")
