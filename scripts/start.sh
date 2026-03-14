@@ -2,7 +2,8 @@
 set -Eeuo pipefail
 
 COZE_WORKSPACE_PATH="${COZE_WORKSPACE_PATH:-$(pwd)}"
-PORT=5000
+# 支持通过环境变量 PORT 指定端口，默认 5000
+PORT="${PORT:-5000}"
 DEPLOY_RUN_PORT="${DEPLOY_RUN_PORT:-$PORT}"
 
 start_service() {
